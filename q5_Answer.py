@@ -77,6 +77,112 @@ class ProductFeatureGenerator(FeatureGenerator):
         return product_sales_complete
 
 
+class BrandFeatureGenerator(FeatureGenerator):
+    """Generate brand-level features"""
+
+    def calculate_features(self, data):
+        """
+        Calculate brand-level features:
+        - sales_brand: Total sales of all products from the same brand and store
+        - MA7_B: Moving average of brand sales in the past 7 days
+        - LAG7_B: Brand sales from 7 days earlier
+        """
+        data = data.copy()
+        data['date'] = pd.to_datetime(data['date'])
+
+        brand_features = data.groupby(['brand_id', 'store_id', 'date'])['quantity'].sum().reset_index()
+        brand_features.rename(columns={'quantity': 'sales_brand'}, inplace=True)
+
+        brand_features.sort_values(['brand_id', 'store_id', 'date'], inplace=True)
+
+        all_dates = pd.date_range(data['date'].min() - timedelta(days=7), data['date'].max())
+        brand_store_combinations = brand_features[['brand_id', 'store_id']].drop_duplicates()
+
+        index_combinations = []
+        for _, row in brand_store_combinations.iterrows():
+            for date in all_dates:
+                index_combinations.append((row['brand_id'], row['store_id'], date))
+
+        complete_index = pd.MultiIndex.from_tuples(
+            index_combinations,
+            names=['brand_id', 'store_id', 'date']
+        )
+
+        brand_sales_ts = brand_features.set_index(['brand_id', 'store_id', 'date'])['sales_brand']
+        brand_sales_complete = brand_sales_ts.reindex(complete_index, fill_value=0).reset_index()
+
+        brand_sales_complete['MA7_B'] = brand_sales_complete.groupby(
+            ['brand_id', 'store_id']
+        )['sales_brand'].transform(
+            lambda x: x.shift(1).rolling(window=7, min_periods=1).mean()
+        )
+
+        brand_sales_complete['LAG7_B'] = brand_sales_complete.groupby(
+            ['brand_id', 'store_id']
+        )['sales_brand'].transform(
+            lambda x: x.shift(7)
+        )
+
+        brand_sales_complete.fillna(0, inplace=True)
+
+        brand_sales_complete['date'] = brand_sales_complete['date'].dt.strftime('%Y-%m-%d')
+
+        return brand_sales_complete
+
+
+class StoreFeatureGenerator(FeatureGenerator):
+    """Generate store-level features"""
+
+    def calculate_features(self, data):
+        """
+        Calculate store-level features:
+        - sales_store: Total sales of the store
+        - MA7_S: Moving average of store sales in the past 7 days
+        - LAG7_S: Store sales from 7 days earlier
+        """
+
+        data = data.copy()
+        data['date'] = pd.to_datetime(data['date'])
+
+        store_features = data.groupby(['store_id', 'date'])['quantity'].sum().reset_index()
+        store_features.rename(columns={'quantity': 'sales_store'}, inplace=True)
+
+        store_features.sort_values(['store_id', 'date'], inplace=True)
+
+        all_dates = pd.date_range(data['date'].min() - timedelta(days=7), data['date'].max())
+        stores = store_features['store_id'].unique()
+
+        index_combinations = []
+        for store_id in stores:
+            for date in all_dates:
+                index_combinations.append((store_id, date))
+
+        complete_index = pd.MultiIndex.from_tuples(
+            index_combinations,
+            names=['store_id', 'date']
+        )
+
+        store_sales_ts = store_features.set_index(['store_id', 'date'])['sales_store']
+        store_sales_complete = store_sales_ts.reindex(complete_index, fill_value=0).reset_index()
+
+        store_sales_complete['MA7_S'] = store_sales_complete.groupby(
+            ['store_id']
+        )['sales_store'].transform(
+            lambda x: x.shift(1).rolling(window=7, min_periods=1).mean()
+        )
+
+        store_sales_complete['LAG7_S'] = store_sales_complete.groupby(
+            ['store_id']
+        )['sales_store'].transform(
+            lambda x: x.shift(7)
+        )
+
+        store_sales_complete.fillna(0, inplace=True)
+
+        store_sales_complete['date'] = store_sales_complete['date'].dt.strftime('%Y-%m-%d')
+
+        return store_sales_complete
+
 class SalesAnalyzer:
     """Main class to analyze sales data"""
 
@@ -88,8 +194,9 @@ class SalesAnalyzer:
 
         # Initialize feature generators
         self.product_feature_generator = ProductFeatureGenerator()
+        self.brand_feature_generator = BrandFeatureGenerator()
+        self.store_feature_generator = StoreFeatureGenerator()
 
-    # [load_data method from Step 1]
     def load_data(self):
         """Load and prepare data from CSV files"""
         # Load CSV files
@@ -140,6 +247,41 @@ class SalesAnalyzer:
 
         # Generate product features
         product_features = self.product_feature_generator.calculate_features(data)
+        brand_features = self.brand_feature_generator.calculate_features(data)
+        store_features = self.store_feature_generator.calculate_features(data)
+
+        merged_df = pd.merge(
+            product_features,
+            brand_features,
+            on=['store_id', 'date'],
+            how='left'
+        )
+        merged_df = pd.merge(
+            merged_df,
+            store_features,
+            on=['store_id', 'date'],
+            how='left'
+        )
+
+        merged_df['brand_id'] = merged_df['product_id'].map(self.brand_dict)
+
+        merged_df['date'] = pd.to_datetime(merged_df['date'])
+        if self.min_date:
+            merged_df = merged_df[merged_df['date'] >= self.min_date]
+        if self.max_date:
+            merged_df = merged_df[merged_df['date'] <= self.max_date]
+
+        merged_df['date'] = merged_df['date'].dt.strftime('%Y-%m-%d')
+
+        merged_df.sort_values(['product_id', 'brand_id', 'store_id', 'date'], inplace=True)
+
+        final_columns = [
+            'product_id', 'store_id', 'brand_id', 'date', 'sales_product',
+            'MA7_P', 'LAG7_P', 'sales_brand', 'MA7_B', 'LAG7_B',
+            'sales_store', 'MA7_S', 'LAG7_S'
+        ]
+
+        self.features_df = merged_df[final_columns]
 
         return product_features
 
