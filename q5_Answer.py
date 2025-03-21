@@ -236,8 +236,8 @@ class SalesAnalyzer:
 
         return data
 
-    def generate_product_features(self):
-        """Generate product-level features"""
+    def generate_features(self):
+        """Generate all features and combine them"""
         # Load and prepare data
         data = self.load_data()
 
@@ -285,14 +285,104 @@ class SalesAnalyzer:
 
         return product_features
 
+        def calculate_wmape(self):
+            """Calculate WMAPE for each product-brand-store group"""
+            # Group by product_id, store_id, brand_id
+            groups = self.features_df.groupby(['product_id', 'store_id', 'brand_id'])
+
+            # Calculate WMAPE for each group
+            wmape_results = []
+            for (product_id, store_id, brand_id), group in groups:
+                # Skip groups with zero or NaN actuals
+                if (group['sales_product'].sum() == 0 or pd.isna(group['sales_product']).all()):
+                    continue
+
+                actuals = group['sales_product'].values
+                forecasts = group['MA7_P'].values
+
+                # WMAPE calculation
+                numerator = np.sum(np.abs(actuals - forecasts))
+                denominator = np.sum(np.abs(actuals))
+
+                if denominator > 0:
+                    wmape = numerator / denominator
+                    wmape_results.append({
+                        'product_id': product_id,
+                        'store_id': store_id,
+                        'brand_id': brand_id,
+                        'WMAPE': wmape
+                    })
+
+            # Create DataFrame and sort by WMAPE in descending order
+            self.wmape_df = pd.DataFrame(wmape_results)
+            self.wmape_df.sort_values('WMAPE', ascending=False, inplace=True)
+
+            # Limit to top N results
+            self.wmape_df = self.wmape_df.head(self.top)
+
+            return self.wmape_df
+
+        def run(self):
+            """Run the complete analysis pipeline"""
+            # Generate features
+            self.generate_features()
+
+            # Calculate WMAPE
+            self.calculate_wmape()
+
+            # Write results to CSV
+            self.features_df.to_csv('features.csv', index=False)
+            self.wmape_df.to_csv('mapes.csv', index=False)
+
+            # Print preview of outputs
+            print("\n--Output1 to be written to: features.csv--")
+            print(f"[{','.join(self.features_df.columns)}]")
+            print(self.features_df.head(2).to_string(index=False))
+            print("...\n...")
+
+            print("\n--Output2 to be written to: mapes.csv--")
+            print(f"[{','.join(self.wmape_df.columns)}]")
+            print(self.wmape_df.to_string(index=False))
+            print("..\n..")
+
+    def parse_arguments():
+        """Parse command line arguments"""
+        parser = argparse.ArgumentParser(description='Sales data analysis')
+
+        parser.add_argument(
+            '--min-date',
+            type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+            default=datetime.strptime('2021-01-08', '%Y-%m-%d'),
+            help='Start date for analysis (YYYY-MM-DD)'
+        )
+
+        parser.add_argument(
+            '--max-date',
+            type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+            default=datetime.strptime('2021-05-30', '%Y-%m-%d'),
+            help='End date for analysis (YYYY-MM-DD)'
+        )
+
+        parser.add_argument(
+            '--top',
+            type=int,
+            default=5,
+            help='Number of rows in WMAPE output'
+        )
+
+        return parser.parse_args()
+
 
 if __name__ == '__main__':
-    # Create analyzer with default dates
-    min_date = datetime.strptime('2021-01-08', '%Y-%m-%d')
-    max_date = datetime.strptime('2021-05-30', '%Y-%m-%d')
-    analyzer = SalesAnalyzer(min_date=min_date, max_date=max_date)
+    # Parse command line arguments
+    args = parse_arguments()
 
-    # Generate product features
-    product_features = analyzer.generate_product_features()
-    print("Product features generated successfully")
-    print(product_features.head())
+    # Create analyzer and run pipeline
+    analyzer = SalesAnalyzer(
+        min_date=args.min_date,
+        max_date=args.max_date,
+        top=args.top
+    )
+
+    # Run analysis
+    analyzer.run()
