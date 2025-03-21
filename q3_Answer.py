@@ -1,4 +1,6 @@
-def find_longest_unique_substrings(s):
+import sys
+
+def longest_unique_substrings(s):
     char_set = set()
     left = 0
     max_length = 0
@@ -23,7 +25,7 @@ def find_longest_unique_substrings(s):
 
 if __name__ == "__main__":
     input_str = input("input: ").strip()
-    substrings, length = find_longest_unique_substrings(input_str)
+    substrings, length = longest_unique_substrings(input_str)
 
     for substring in substrings:
         print(f"output: {substring} length: {length}")
