@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 import argparse
@@ -87,17 +88,22 @@ class BrandFeatureGenerator(FeatureGenerator):
         - MA7_B: Moving average of brand sales in the past 7 days
         - LAG7_B: Brand sales from 7 days earlier
         """
+        # Ensure date is in datetime format
         data = data.copy()
         data['date'] = pd.to_datetime(data['date'])
 
+        # Group by brand_id, store_id, and date to get sales_brand
         brand_features = data.groupby(['brand_id', 'store_id', 'date'])['quantity'].sum().reset_index()
         brand_features.rename(columns={'quantity': 'sales_brand'}, inplace=True)
 
+        # Sort by brand_id, store_id, and date for time-based features
         brand_features.sort_values(['brand_id', 'store_id', 'date'], inplace=True)
 
+        # Create a separate DataFrame with all dates for each brand-store combination
         all_dates = pd.date_range(data['date'].min() - timedelta(days=7), data['date'].max())
         brand_store_combinations = brand_features[['brand_id', 'store_id']].drop_duplicates()
 
+        # Create cartesian product of brand-store combinations and dates
         index_combinations = []
         for _, row in brand_store_combinations.iterrows():
             for date in all_dates:
@@ -108,23 +114,28 @@ class BrandFeatureGenerator(FeatureGenerator):
             names=['brand_id', 'store_id', 'date']
         )
 
+        # Reindex and fill missing values with 0
         brand_sales_ts = brand_features.set_index(['brand_id', 'store_id', 'date'])['sales_brand']
         brand_sales_complete = brand_sales_ts.reindex(complete_index, fill_value=0).reset_index()
 
+        # Calculate MA7_B - Moving average of past 7 days
         brand_sales_complete['MA7_B'] = brand_sales_complete.groupby(
             ['brand_id', 'store_id']
         )['sales_brand'].transform(
             lambda x: x.shift(1).rolling(window=7, min_periods=1).mean()
         )
 
+        # Calculate LAG7_B - Sales from 7 days earlier
         brand_sales_complete['LAG7_B'] = brand_sales_complete.groupby(
             ['brand_id', 'store_id']
         )['sales_brand'].transform(
             lambda x: x.shift(7)
         )
 
+        # Replace NaN with 0
         brand_sales_complete.fillna(0, inplace=True)
 
+        # Convert date back to string format for consistency
         brand_sales_complete['date'] = brand_sales_complete['date'].dt.strftime('%Y-%m-%d')
 
         return brand_sales_complete
@@ -140,18 +151,22 @@ class StoreFeatureGenerator(FeatureGenerator):
         - MA7_S: Moving average of store sales in the past 7 days
         - LAG7_S: Store sales from 7 days earlier
         """
-
+        # Ensure date is in datetime format
         data = data.copy()
         data['date'] = pd.to_datetime(data['date'])
 
+        # Group by store_id and date to get sales_store
         store_features = data.groupby(['store_id', 'date'])['quantity'].sum().reset_index()
         store_features.rename(columns={'quantity': 'sales_store'}, inplace=True)
 
+        # Sort by store_id and date for time-based features
         store_features.sort_values(['store_id', 'date'], inplace=True)
 
+        # Create a separate DataFrame with all dates for each store
         all_dates = pd.date_range(data['date'].min() - timedelta(days=7), data['date'].max())
         stores = store_features['store_id'].unique()
 
+        # Create cartesian product of stores and dates
         index_combinations = []
         for store_id in stores:
             for date in all_dates:
@@ -162,32 +177,38 @@ class StoreFeatureGenerator(FeatureGenerator):
             names=['store_id', 'date']
         )
 
+        # Reindex and fill missing values with 0
         store_sales_ts = store_features.set_index(['store_id', 'date'])['sales_store']
         store_sales_complete = store_sales_ts.reindex(complete_index, fill_value=0).reset_index()
 
+        # Calculate MA7_S - Moving average of past 7 days
         store_sales_complete['MA7_S'] = store_sales_complete.groupby(
             ['store_id']
         )['sales_store'].transform(
             lambda x: x.shift(1).rolling(window=7, min_periods=1).mean()
         )
 
+        # Calculate LAG7_S - Sales from 7 days earlier
         store_sales_complete['LAG7_S'] = store_sales_complete.groupby(
             ['store_id']
         )['sales_store'].transform(
             lambda x: x.shift(7)
         )
 
+        # Replace NaN with 0
         store_sales_complete.fillna(0, inplace=True)
 
+        # Convert date back to string format for consistency
         store_sales_complete['date'] = store_sales_complete['date'].dt.strftime('%Y-%m-%d')
 
         return store_sales_complete
 
+
 class SalesAnalyzer:
-    """Main class to analyze sales data"""
+    """Main class to analyze sales data and generate features"""
 
     def __init__(self, min_date=None, max_date=None, top=5):
-        """Initialize with date range and top N for output"""
+        """Initialize with date range and top N for WMAPE output"""
         self.min_date = min_date
         self.max_date = max_date
         self.top = top
@@ -221,6 +242,7 @@ class SalesAnalyzer:
         # Add brand_id to sales data
         self.sales_df['brand_id'] = self.sales_df['product_id'].map(self.brand_dict)
 
+        # Keep date as datetime for proper processing
         return self.sales_df
 
     def filter_date_range(self, data):
@@ -245,11 +267,12 @@ class SalesAnalyzer:
         if self.min_date or self.max_date:
             data = self.filter_date_range(data)
 
-        # Generate product features
+        # Generate features
         product_features = self.product_feature_generator.calculate_features(data)
         brand_features = self.brand_feature_generator.calculate_features(data)
         store_features = self.store_feature_generator.calculate_features(data)
 
+        # Merge features
         merged_df = pd.merge(
             product_features,
             brand_features,
@@ -263,18 +286,23 @@ class SalesAnalyzer:
             how='left'
         )
 
+        # Add brand_id for each product_id
         merged_df['brand_id'] = merged_df['product_id'].map(self.brand_dict)
 
+        # Convert date to datetime for filtering
         merged_df['date'] = pd.to_datetime(merged_df['date'])
         if self.min_date:
             merged_df = merged_df[merged_df['date'] >= self.min_date]
         if self.max_date:
             merged_df = merged_df[merged_df['date'] <= self.max_date]
 
+        # Convert back to string format
         merged_df['date'] = merged_df['date'].dt.strftime('%Y-%m-%d')
 
+        # Sort by product_id, brand_id, store_id, date
         merged_df.sort_values(['product_id', 'brand_id', 'store_id', 'date'], inplace=True)
 
+        # Select and reorder columns
         final_columns = [
             'product_id', 'store_id', 'brand_id', 'date', 'sales_product',
             'MA7_P', 'LAG7_P', 'sales_brand', 'MA7_B', 'LAG7_B',
@@ -283,94 +311,95 @@ class SalesAnalyzer:
 
         self.features_df = merged_df[final_columns]
 
-        return product_features
+        return self.features_df
 
-        def calculate_wmape(self):
-            """Calculate WMAPE for each product-brand-store group"""
-            # Group by product_id, store_id, brand_id
-            groups = self.features_df.groupby(['product_id', 'store_id', 'brand_id'])
+    def calculate_wmape(self):
+        """Calculate WMAPE for each product-brand-store group"""
+        # Group by product_id, store_id, brand_id
+        groups = self.features_df.groupby(['product_id', 'store_id', 'brand_id'])
 
-            # Calculate WMAPE for each group
-            wmape_results = []
-            for (product_id, store_id, brand_id), group in groups:
-                # Skip groups with zero or NaN actuals
-                if (group['sales_product'].sum() == 0 or pd.isna(group['sales_product']).all()):
-                    continue
+        # Calculate WMAPE for each group
+        wmape_results = []
+        for (product_id, store_id, brand_id), group in groups:
+            # Skip groups with zero or NaN actuals
+            if (group['sales_product'].sum() == 0 or pd.isna(group['sales_product']).all()):
+                continue
 
-                actuals = group['sales_product'].values
-                forecasts = group['MA7_P'].values
+            actuals = group['sales_product'].values
+            forecasts = group['MA7_P'].values
 
-                # WMAPE calculation
-                numerator = np.sum(np.abs(actuals - forecasts))
-                denominator = np.sum(np.abs(actuals))
+            # WMAPE calculation
+            numerator = np.sum(np.abs(actuals - forecasts))
+            denominator = np.sum(np.abs(actuals))
 
-                if denominator > 0:
-                    wmape = numerator / denominator
-                    wmape_results.append({
-                        'product_id': product_id,
-                        'store_id': store_id,
-                        'brand_id': brand_id,
-                        'WMAPE': wmape
-                    })
+            if denominator > 0:
+                wmape = numerator / denominator
+                wmape_results.append({
+                    'product_id': product_id,
+                    'store_id': store_id,
+                    'brand_id': brand_id,
+                    'WMAPE': wmape
+                })
 
-            # Create DataFrame and sort by WMAPE in descending order
-            self.wmape_df = pd.DataFrame(wmape_results)
-            self.wmape_df.sort_values('WMAPE', ascending=False, inplace=True)
+        # Create DataFrame and sort by WMAPE in descending order
+        self.wmape_df = pd.DataFrame(wmape_results)
+        self.wmape_df.sort_values('WMAPE', ascending=False, inplace=True)
 
-            # Limit to top N results
-            self.wmape_df = self.wmape_df.head(self.top)
+        # Limit to top N results
+        self.wmape_df = self.wmape_df.head(self.top)
 
-            return self.wmape_df
+        return self.wmape_df
 
-        def run(self):
-            """Run the complete analysis pipeline"""
-            # Generate features
-            self.generate_features()
+    def run(self):
+        """Run the complete analysis pipeline"""
+        # Generate features
+        self.generate_features()
 
-            # Calculate WMAPE
-            self.calculate_wmape()
+        # Calculate WMAPE
+        self.calculate_wmape()
 
-            # Write results to CSV
-            self.features_df.to_csv('features.csv', index=False)
-            self.wmape_df.to_csv('mapes.csv', index=False)
+        # Write results to CSV
+        self.features_df.to_csv('features.csv', index=False)
+        self.wmape_df.to_csv('mapes.csv', index=False)
 
-            # Print preview of outputs
-            print("\n--Output1 to be written to: features.csv--")
-            print(f"[{','.join(self.features_df.columns)}]")
-            print(self.features_df.head(2).to_string(index=False))
-            print("...\n...")
+        # Print preview of outputs
+        print("\n--Output1 to be written to: features.csv--")
+        print(f"[{','.join(self.features_df.columns)}]")
+        print(self.features_df.head(2).to_string(index=False))
+        print("...\n...")
 
-            print("\n--Output2 to be written to: mapes.csv--")
-            print(f"[{','.join(self.wmape_df.columns)}]")
-            print(self.wmape_df.to_string(index=False))
-            print("..\n..")
+        print("\n--Output2 to be written to: mapes.csv--")
+        print(f"[{','.join(self.wmape_df.columns)}]")
+        print(self.wmape_df.to_string(index=False))
+        print("..\n..")
 
-    def parse_arguments():
-        """Parse command line arguments"""
-        parser = argparse.ArgumentParser(description='Sales data analysis')
 
-        parser.add_argument(
-            '--min-date',
-            type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
-            default=datetime.strptime('2021-01-08', '%Y-%m-%d'),
-            help='Start date for analysis (YYYY-MM-DD)'
-        )
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Sales data analysis')
 
-        parser.add_argument(
-            '--max-date',
-            type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
-            default=datetime.strptime('2021-05-30', '%Y-%m-%d'),
-            help='End date for analysis (YYYY-MM-DD)'
-        )
+    parser.add_argument(
+        '--min-date',
+        type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+        default=datetime.strptime('2021-01-08', '%Y-%m-%d'),
+        help='Start date for analysis (YYYY-MM-DD)'
+    )
 
-        parser.add_argument(
-            '--top',
-            type=int,
-            default=5,
-            help='Number of rows in WMAPE output'
-        )
+    parser.add_argument(
+        '--max-date',
+        type=lambda s: datetime.strptime(s, '%Y-%m-%d'),
+        default=datetime.strptime('2021-05-30', '%Y-%m-%d'),
+        help='End date for analysis (YYYY-MM-DD)'
+    )
 
-        return parser.parse_args()
+    parser.add_argument(
+        '--top',
+        type=int,
+        default=5,
+        help='Number of rows in WMAPE output'
+    )
+
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
